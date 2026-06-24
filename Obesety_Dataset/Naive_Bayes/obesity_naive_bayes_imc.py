@@ -2,7 +2,7 @@
 =============================================================================
 Trabalho Final - Inteligência Artificial (PUCRS)
 Dataset: Estimation of Obesity Levels Based On Eating Habits and Physical Condition
-Modelo Obrigatório: Naive Bayes
+Modelo Obrigatório: Naive Bayes  |  Versão: com feature IMC (Peso / Altura²)
 
 Antes de rodar, instale as dependências:
     pip install ucimlrepo scikit-learn pandas numpy matplotlib seaborn
@@ -21,17 +21,17 @@ from ucimlrepo import fetch_ucirepo
 
 from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, learning_curve
 from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.naive_bayes import GaussianNB, MultinomialNB
+from sklearn.naive_bayes import GaussianNB
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
-    classification_report, confusion_matrix, ConfusionMatrixDisplay,
+    classification_report, ConfusionMatrixDisplay,
     precision_recall_fscore_support
 )
 
 warnings.filterwarnings("ignore")
 sns.set_theme(style="whitegrid", palette="colorblind")
 
-OUTPUT_DIR = "output_naive_bayes"
+OUTPUT_DIR = "output_nb_IMC"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # =============================================================================
@@ -41,15 +41,25 @@ print("=" * 70)
 print("1. CARREGAMENTO DO DATASET")
 print("=" * 70)
 
-# Importa direto do UCI Machine Learning Repository
-# Instale antes: pip install ucimlrepo
 dataset = fetch_ucirepo(id=544)
 X = dataset.data.features.copy()
 y = dataset.data.targets.copy().values.ravel()
 
-print(f"Shape das features: {X.shape}")
+print(f"Shape das features original: {X.shape}")
 print(f"Total de amostras: {len(y)}")
 print(f"Valores ausentes: {X.isnull().sum().sum()}")
+
+# =============================================================================
+# ENGENHARIA DE FEATURES — IMC
+# IMC = Peso (kg) / Altura (m)²  — base clínica para classificação de obesidade
+# =============================================================================
+X["IMC"] = X["Weight"] / (X["Height"] ** 2)
+
+print(f"\nFeature IMC adicionada. Novo shape: {X.shape}")
+print(f"\nEstatísticas do IMC por classe:")
+imc_by_class = pd.DataFrame({"IMC": X["IMC"], "Classe": y})
+print(imc_by_class.groupby("Classe")["IMC"].describe().round(2).to_string())
+
 print(f"\nClasses (NObeyesdad):")
 for cls, cnt in pd.Series(y).value_counts().sort_index().items():
     print(f"  {cls}: {cnt} ({cnt/len(y)*100:.1f}%)")
@@ -62,16 +72,16 @@ print("2. ANÁLISE EXPLORATÓRIA")
 print("=" * 70)
 
 cat_cols = X.select_dtypes(include=["object"]).columns.tolist()
-num_cols = X.select_dtypes(include=["number"]).columns.tolist()
+num_cols = X.select_dtypes(include=["number"]).columns.tolist()  # inclui IMC automaticamente
 print(f"Variáveis categóricas ({len(cat_cols)}): {cat_cols}")
 print(f"Variáveis numéricas  ({len(num_cols)}): {num_cols}")
 
-print("\nEstatísticas descritivas (numéricas):")
+print("\nEstatísticas descritivas (numéricas, incluindo IMC):")
 print(X[num_cols].describe().round(2).to_string())
 
 # Distribuição das classes
-fig, ax = plt.subplots(figsize=(10, 5))
 order = sorted(pd.Series(y).unique())
+fig, ax = plt.subplots(figsize=(10, 5))
 sns.countplot(x=y, order=order, ax=ax)
 ax.set_title("Distribuição das Classes de Obesidade", fontsize=14, fontweight="bold")
 ax.set_xlabel("Nível de Obesidade")
@@ -82,25 +92,28 @@ plt.savefig(f"{OUTPUT_DIR}/01_distribuicao_classes.png", dpi=150)
 plt.close()
 print("  -> Gráfico salvo: 01_distribuicao_classes.png")
 
-# Correlação
-fig, ax = plt.subplots(figsize=(10, 8))
+# Correlação (agora com IMC)
+fig, ax = plt.subplots(figsize=(11, 9))
 corr = X[num_cols].corr()
 sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", center=0, ax=ax)
-ax.set_title("Matriz de Correlação - Variáveis Numéricas", fontsize=14, fontweight="bold")
+ax.set_title("Matriz de Correlação - Variáveis Numéricas (com IMC)", fontsize=14, fontweight="bold")
 plt.tight_layout()
 plt.savefig(f"{OUTPUT_DIR}/02_correlacao.png", dpi=150)
 plt.close()
 print("  -> Gráfico salvo: 02_correlacao.png")
 
-# Boxplots
+# Boxplots — IMC em destaque na primeira posição
 fig, axes = plt.subplots(2, 3, figsize=(15, 9))
-key_nums = ["Age", "Height", "Weight", "FCVC", "NCP", "CH2O"]
+key_nums = ["IMC", "Age", "Height", "Weight", "FCVC", "NCP"]
 for ax, col in zip(axes.ravel(), key_nums):
-    sns.boxplot(x=y, y=X[col], order=order, ax=ax)
-    ax.set_title(col, fontsize=12)
+    color = "#e74c3c" if col == "IMC" else None  # IMC em vermelho para destaque
+    sns.boxplot(x=y, y=X[col], order=order, ax=ax, color=color)
+    title = f"{col} ★" if col == "IMC" else col
+    ax.set_title(title, fontsize=12, fontweight="bold" if col == "IMC" else "normal")
     ax.set_xlabel("")
     ax.tick_params(axis="x", rotation=45)
-plt.suptitle("Distribuição de Variáveis Numéricas por Classe", fontsize=14, fontweight="bold")
+plt.suptitle("Distribuição de Variáveis Numéricas por Classe (★ = nova feature IMC)",
+             fontsize=14, fontweight="bold")
 plt.tight_layout()
 plt.savefig(f"{OUTPUT_DIR}/03_boxplots.png", dpi=150)
 plt.close()
@@ -130,16 +143,17 @@ X_train, X_test, y_train, y_test = train_test_split(
     X_encoded, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded
 )
 print(f"\nTreino: {X_train.shape[0]} amostras | Teste: {X_test.shape[0]} amostras")
+print(f"Total de features: {X_train.shape[1]} (incluindo IMC)")
 
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+X_test_scaled  = scaler.transform(X_test)
 
 # =============================================================================
-# 4. NAIVE BAYES - MODELO BASE (GaussianNB default)
+# 4. NAIVE BAYES - MODELO BASE (GaussianNB default, com IMC)
 # =============================================================================
 print("\n" + "=" * 70)
-print("4. NAIVE BAYES - MODELO BASE (GaussianNB, var_smoothing=1e-9)")
+print("4. NAIVE BAYES - MODELO BASE (GaussianNB, var_smoothing=1e-9, com IMC)")
 print("=" * 70)
 
 gnb_base = GaussianNB()
@@ -156,14 +170,14 @@ ConfusionMatrixDisplay.from_predictions(
     y_test, y_pred_base, display_labels=class_names, ax=ax,
     cmap="Blues", xticks_rotation=45, colorbar=False
 )
-ax.set_title("Matriz de Confusão - GaussianNB (Base)", fontsize=14, fontweight="bold")
+ax.set_title("Matriz de Confusão - GaussianNB Base (com IMC)", fontsize=14, fontweight="bold")
 plt.tight_layout()
 plt.savefig(f"{OUTPUT_DIR}/04_cm_gaussiannb_base.png", dpi=150)
 plt.close()
 print("  -> Gráfico salvo: 04_cm_gaussiannb_base.png")
 
 # =============================================================================
-# 5. VARIAÇÕES DE HIPERPARÂMETROS (3 variações do GaussianNB)
+# 5. VARIAÇÕES DE HIPERPARÂMETROS
 # =============================================================================
 print("\n" + "=" * 70)
 print("5. VARIAÇÕES DE HIPERPARÂMETROS")
@@ -172,12 +186,7 @@ print("=" * 70)
 cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
 # --- 5.1 var_smoothing ---
-# Controla o quanto de variância mínima é adicionada a cada feature para
-# evitar divisões por zero. Valores maiores suavizam mais as distribuições.
 print("\n--- 5.1 GaussianNB: variação de var_smoothing ---")
-print("    O que é: fração da maior variância do dataset adicionada a todas")
-print("    as features. Evita instabilidade numérica e suaviza o modelo.\n")
-
 var_smoothing_values = [1e-12, 1e-9, 1e-6, 1e-3, 1e-1, 1.0]
 results_vs = []
 for vs in var_smoothing_values:
@@ -197,15 +206,15 @@ df_vs = pd.DataFrame(results_vs)
 
 fig, ax = plt.subplots(figsize=(10, 5))
 x_labels = [f"{v:.0e}" for v in var_smoothing_values]
-ax.plot(x_labels, df_vs["accuracy_test"], "o-", label="Acurácia (Teste)", linewidth=2, markersize=8)
-ax.plot(x_labels, df_vs["f1_weighted_test"], "s--", label="F1-Score (Teste)", linewidth=2, markersize=8)
-ax.plot(x_labels, df_vs["cv_mean"], "^:", label="CV Accuracy (Média)", linewidth=2, markersize=8)
+ax.plot(x_labels, df_vs["accuracy_test"],    "o-", label="Acurácia (Teste)",   linewidth=2, markersize=8)
+ax.plot(x_labels, df_vs["f1_weighted_test"], "s--", label="F1-Score (Teste)",   linewidth=2, markersize=8)
+ax.plot(x_labels, df_vs["cv_mean"],          "^:",  label="CV Accuracy (Média)", linewidth=2, markersize=8)
 ax.fill_between(range(len(x_labels)),
     df_vs["cv_mean"] - df_vs["cv_std"], df_vs["cv_mean"] + df_vs["cv_std"],
-    alpha=0.15, label="CV +/- 1 std")
+    alpha=0.15, label="CV ± 1 std")
 ax.set_xlabel("var_smoothing")
 ax.set_ylabel("Score")
-ax.set_title("GaussianNB: Impacto do var_smoothing", fontsize=14, fontweight="bold")
+ax.set_title("GaussianNB (com IMC): Impacto do var_smoothing", fontsize=14, fontweight="bold")
 ax.legend()
 ax.set_ylim(0.3, 1.0)
 plt.tight_layout()
@@ -214,13 +223,7 @@ plt.close()
 print("  -> Gráfico salvo: 05_var_smoothing.png")
 
 # --- 5.2 priors ---
-# Define manualmente a probabilidade inicial de cada classe antes de ver
-# os dados. Por padrão (None) o modelo estima pelos dados (frequência real).
-# Testar priors uniformes força o modelo a tratar todas as classes igualmente.
 print("\n--- 5.2 GaussianNB: variação de priors (probabilidades a priori) ---")
-print("    O que é: probabilidade inicial de cada classe antes de observar")
-print("    os dados. None = estimado pelos dados; uniform = todas iguais.\n")
-
 n_classes = len(class_names)
 prior_options = {
     "priors=None (estimado pelos dados)": None,
@@ -246,13 +249,13 @@ df_priors = pd.DataFrame(results_priors)
 fig, ax = plt.subplots(figsize=(9, 5))
 x_pos = np.arange(len(df_priors))
 width = 0.25
-ax.bar(x_pos - width, df_priors["accuracy_test"], width, label="Accuracy", color="#4C72B0")
-ax.bar(x_pos, df_priors["f1_weighted_test"], width, label="F1-Score", color="#55A868")
-ax.bar(x_pos + width, df_priors["cv_mean"], width, label="CV Mean", color="#C44E52")
+ax.bar(x_pos - width, df_priors["accuracy_test"],    width, label="Accuracy", color="#4C72B0")
+ax.bar(x_pos,         df_priors["f1_weighted_test"], width, label="F1-Score", color="#55A868")
+ax.bar(x_pos + width, df_priors["cv_mean"],          width, label="CV Mean",  color="#C44E52")
 ax.set_xticks(x_pos)
 ax.set_xticklabels(["None\n(dados reais)", "Uniform\n(1/7 cada)"], fontsize=10)
 ax.set_ylabel("Score")
-ax.set_title("GaussianNB: Impacto do priors", fontsize=14, fontweight="bold")
+ax.set_title("GaussianNB (com IMC): Impacto do priors", fontsize=14, fontweight="bold")
 ax.set_ylim(0.3, 1.0)
 ax.legend()
 plt.tight_layout()
@@ -261,11 +264,7 @@ plt.close()
 print("  -> Gráfico salvo: 06_priors.png")
 
 # --- 5.3 var_smoothing + priors combinados (grid) ---
-# Combinação das duas variações anteriores para avaliar interação entre eles.
 print("\n--- 5.3 GaussianNB: grid var_smoothing x priors ---")
-print("    Avalia se a melhor configuração de var_smoothing muda dependendo")
-print("    da escolha de priors.\n")
-
 grid_results = []
 for vs in [1e-9, 1e-3, 1e-1]:
     for label, prior in prior_options.items():
@@ -298,7 +297,7 @@ ax.set_xticks(x_pos)
 ax.set_xticklabels(vs_labels)
 ax.set_xlabel("var_smoothing")
 ax.set_ylabel("Acurácia no Teste")
-ax.set_title("GaussianNB: Grid var_smoothing x priors", fontsize=14, fontweight="bold")
+ax.set_title("GaussianNB (com IMC): Grid var_smoothing x priors", fontsize=14, fontweight="bold")
 ax.set_ylim(0.3, 1.0)
 ax.legend()
 plt.tight_layout()
@@ -310,7 +309,7 @@ print("  -> Gráfico salvo: 07_grid_vs_priors.png")
 # 6. MELHOR MODELO - ANÁLISE DETALHADA
 # =============================================================================
 print("\n" + "=" * 70)
-print("6. MELHOR MODELO NAIVE BAYES - ANÁLISE DETALHADA")
+print("6. MELHOR MODELO NAIVE BAYES (com IMC) - ANÁLISE DETALHADA")
 print("=" * 70)
 
 best_vs_row = df_vs.loc[df_vs["accuracy_test"].idxmax()]
@@ -321,7 +320,7 @@ best_gnb = GaussianNB(var_smoothing=best_vs)
 best_gnb.fit(X_train_scaled, y_train)
 y_pred_best = best_gnb.predict(X_test_scaled)
 
-print("\nClassification Report (melhor GaussianNB):")
+print("\nClassification Report (melhor GaussianNB com IMC):")
 print(classification_report(y_test, y_pred_best, target_names=class_names))
 
 # Confusion Matrix normalizada
@@ -330,8 +329,10 @@ ConfusionMatrixDisplay.from_predictions(
     y_test, y_pred_best, display_labels=class_names, ax=ax,
     cmap="Blues", xticks_rotation=45, colorbar=False, normalize="true"
 )
-ax.set_title(f"Matriz de Confusão Normalizada - GaussianNB (var_smoothing={best_vs:.0e})",
-             fontsize=13, fontweight="bold")
+ax.set_title(
+    f"Matriz de Confusão Normalizada - GaussianNB com IMC (var_smoothing={best_vs:.0e})",
+    fontsize=13, fontweight="bold"
+)
 plt.tight_layout()
 plt.savefig(f"{OUTPUT_DIR}/08_cm_melhor_modelo_normalizada.png", dpi=150)
 plt.close()
@@ -348,12 +349,12 @@ fig, ax = plt.subplots(figsize=(12, 6))
 x = np.arange(len(class_names))
 w = 0.25
 ax.bar(x - w, df_perclass["Precision"], w, label="Precision")
-ax.bar(x, df_perclass["Recall"], w, label="Recall")
-ax.bar(x + w, df_perclass["F1-Score"], w, label="F1-Score")
+ax.bar(x,     df_perclass["Recall"],    w, label="Recall")
+ax.bar(x + w, df_perclass["F1-Score"],  w, label="F1-Score")
 ax.set_xticks(x)
 ax.set_xticklabels(class_names, rotation=30, ha="right", fontsize=9)
 ax.set_ylabel("Score")
-ax.set_title("Métricas por Classe - Melhor GaussianNB", fontsize=14, fontweight="bold")
+ax.set_title("Métricas por Classe - GaussianNB com IMC", fontsize=14, fontweight="bold")
 ax.legend()
 ax.set_ylim(0, 1.1)
 plt.tight_layout()
@@ -376,8 +377,8 @@ train_sizes, train_scores, val_scores = learning_curve(
 )
 
 fig, ax = plt.subplots(figsize=(10, 6))
-ax.plot(train_sizes, train_scores.mean(axis=1), "o-", label="Treino", linewidth=2)
-ax.plot(train_sizes, val_scores.mean(axis=1), "s-", label="Validação", linewidth=2)
+ax.plot(train_sizes, train_scores.mean(axis=1), "o-", label="Treino",    linewidth=2)
+ax.plot(train_sizes, val_scores.mean(axis=1),   "s-", label="Validação", linewidth=2)
 ax.fill_between(train_sizes,
     train_scores.mean(axis=1) - train_scores.std(axis=1),
     train_scores.mean(axis=1) + train_scores.std(axis=1), alpha=0.1)
@@ -386,16 +387,16 @@ ax.fill_between(train_sizes,
     val_scores.mean(axis=1) + val_scores.std(axis=1), alpha=0.1)
 ax.set_xlabel("Tamanho do conjunto de treino")
 ax.set_ylabel("Acurácia")
-ax.set_title("Curva de Aprendizado - GaussianNB", fontsize=14, fontweight="bold")
+ax.set_title("Curva de Aprendizado - GaussianNB com IMC", fontsize=14, fontweight="bold")
 ax.legend()
 plt.tight_layout()
 plt.savefig(f"{OUTPUT_DIR}/10_learning_curve.png", dpi=150)
 plt.close()
 
 train_acc = accuracy_score(y_train, best_gnb.predict(X_train_scaled))
-test_acc = accuracy_score(y_test, y_pred_best)
-print(f"  Acurácia no treino:  {train_acc:.4f}")
-print(f"  Acurácia no teste:   {test_acc:.4f}")
+test_acc  = accuracy_score(y_test,  y_pred_best)
+print(f"  Acurácia no treino:   {train_acc:.4f}")
+print(f"  Acurácia no teste:    {test_acc:.4f}")
 print(f"  Gap (treino - teste): {train_acc - test_acc:.4f}")
 if train_acc - test_acc > 0.05:
     print("  -> Indicativo de leve OVERFITTING")
@@ -412,16 +413,15 @@ print("\n" + "=" * 70)
 print("8. TABELA RESUMO FINAL")
 print("=" * 70)
 
-print("\n--- Resumo: var_smoothing no GaussianNB ---")
+print("\n--- Resumo: var_smoothing no GaussianNB (com IMC) ---")
 print(df_vs.to_string(index=False, float_format="%.4f"))
 
-print("\n--- Resumo: priors no GaussianNB ---")
+print("\n--- Resumo: priors no GaussianNB (com IMC) ---")
 print(df_priors.to_string(index=False, float_format="%.4f"))
 
-print("\n--- Resumo: grid var_smoothing x priors ---")
+print("\n--- Resumo: grid var_smoothing x priors (com IMC) ---")
 print(df_grid.to_string(index=False, float_format="%.4f"))
 
-# Salvar tabelas
 df_vs.to_csv(f"{OUTPUT_DIR}/tabela_var_smoothing.csv", index=False)
 df_priors.to_csv(f"{OUTPUT_DIR}/tabela_priors.csv", index=False)
 df_grid.to_csv(f"{OUTPUT_DIR}/tabela_grid_vs_priors.csv", index=False)
